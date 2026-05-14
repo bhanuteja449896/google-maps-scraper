@@ -143,6 +143,30 @@ class Client:
         if self._req_count > 0:
             time.sleep(random.uniform(self._min_delay, self._max_delay))
 
+    def fetch(self, url, headers=None):
+        """Generic GET without Maps-specific headers.
+        """
+        headers = dict(headers) if headers else {}
+        self._throttle()
+        last_err = None
+        for attempt in range(1, 4):
+            try:
+                resp = self._session.get(url, headers=headers, timeout=self._timeout)
+                self._req_count += 1
+                if resp.status_code == 429:
+                    backoff = min(2 ** attempt + random.random(), 30)
+                    logger.warning("Rate limited (429) on %s. Backoff %.1fs (attempt %d/3)", url, backoff, attempt)
+                    time.sleep(backoff)
+                    self._session.refresh()
+                    continue
+                return resp
+            except Exception as exc:
+                last_err = exc
+                wait = min(2 ** attempt, 10)
+                logger.debug("Attempt %d/3 failed for %s: %s. Retrying in %.1fs", attempt, url, exc, wait)
+                time.sleep(wait)
+        raise last_err or RuntimeError("Request failed after 3 attempts")
+
     def close(self):
         self.save()
         self._session.close()
