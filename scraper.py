@@ -7,6 +7,7 @@ import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from helpers.client import Client
+from helpers.email_extractor import extract_emails
 from helpers.endpoints import place_url, reviews_url, search_url
 from helpers.parsers import parse_place_response, parse_reviews_response, parse_search_response
 
@@ -23,7 +24,8 @@ class GoogleMapsScraper:
     """High-concurrency place scraper using independent httpcloak sessions per worker."""
 
     def __init__(self, proxy=None, timeout=30, lang="en", gl="us",
-                 min_delay=1.0, max_delay=3.0, workers=4, session_file=None):
+                 min_delay=1.0, max_delay=3.0, workers=4, session_file=None,
+                 extract_emails=False):
         self.proxy = proxy
         self.timeout = timeout
         self.lang = lang
@@ -32,6 +34,7 @@ class GoogleMapsScraper:
         self.max_delay = max_delay
         self.workers = max(1, workers)
         self.session_file = session_file
+        self.extract_emails = extract_emails
         self._main_client = None
 
     def _new_client(self):
@@ -388,6 +391,19 @@ class GoogleMapsScraper:
         db.update_job_status(job_id, "done")
         return stats
 
+    def _maybe_extract_email(self, client, place):
+        """Fetch the place's website and extract an email if we don't have one."""
+        if not self.extract_emails:
+            return
+        if place.email:
+            return
+        if not place.website:
+            return
+        emails = extract_emails(place.website, client.fetch, timeout=min(self.timeout, 15))
+        if emails:
+            place.email = emails[0]
+            logger.info("Extracted email %s from %s", place.email, place.website)
+
     def scrape_single_place(self, db, place_id, max_reviews=None, lat=0.0, lng=0.0, query=""):
         """Scrape a single place with full details and reviews."""
         if not self._main_client:
@@ -399,6 +415,7 @@ class GoogleMapsScraper:
             _print_info(f"Failed to fetch place details for {place_id[:30]}")
             return None, 0
 
+        self._maybe_extract_email(self._main_client, place)
         db.upsert_place(place)
         _print_info(f"Saved place: {place.name} ({place.rating}/5, {place.review_count:,} reviews)")
 
@@ -481,6 +498,7 @@ class GoogleMapsScraper:
         if not place.place_id:
             place.place_id = pid
 
+        self._maybe_extract_email(client, place)
         db.upsert_place(place)
 
         reviews_saved = 0

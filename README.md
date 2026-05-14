@@ -33,6 +33,7 @@ A request-based scraper that extracts Google Maps place data and reviews without
 - **Session persistence** -> 0-RTT TLS resumption via `session.json`
 - **Rate limit handling** -> Exponential backoff + connection refresh on 429
 - **WAL-mode SQLite** -> Concurrent reads/writes without lock contention
+- **Email extraction** -> Fetches the business website and extracts contact emails
 
 ## Install
 
@@ -59,6 +60,9 @@ python main.py resume <job_id> --max-reviews=100
 
 # Database stats
 python main.py stats
+
+# Extract emails from business websites
+python main.py search "hotels in London" --max-places=50 --extract-emails
 ```
 
 ## Commands
@@ -73,17 +77,18 @@ python main.py stats
 
 ## Options
 
-| Flag             | Description                                      | Default               |
-| ---------------- | ------------------------------------------------ | --------------------- |
-| `--db`           | SQLite database path                             | `output/gmaps.db`     |
-| `--max-places`   | Max places to scrape (`None` = unlimited)        | unlimited             |
-| `--max-reviews`  | Max reviews per place (`None` = all, `0` = skip) | unlimited             |
-| `--workers`      | Concurrent workers                               | 4                     |
-| `--delay`        | Min seconds between requests                     | 2.5                   |
-| `--proxy`        | Proxy URL (`socks5://...` or `http://...`)       | None                  |
-| `--session-file` | Session persistence path                         | `output/session.json` |
-| `--lang`         | Language code                                    | `en`                  |
-| `--gl`           | Country/region code                              | `us`                  |
+| Flag               | Description                                      | Default               |
+| ------------------ | ------------------------------------------------ | --------------------- |
+| `--db`             | SQLite database path                             | `output/gmaps.db`     |
+| `--max-places`     | Max places to scrape (`None` = unlimited)        | unlimited             |
+| `--max-reviews`    | Max reviews per place (`None` = all, `0` = skip) | unlimited             |
+| `--workers`        | Concurrent workers                               | 4                     |
+| `--delay`          | Min seconds between requests                     | 2.5                   |
+| `--proxy`          | Proxy URL (`socks5://...` or `http://...`)       | None                  |
+| `--session-file`   | Session persistence path                         | `output/session.json` |
+| `--lang`           | Language code                                    | `en`                  |
+| `--gl`             | Country/region code                              | `us`                  |
+| `--extract-emails` | Fetch website & extract email if missing         | `false`               |
 
 ## Typical Workflows
 
@@ -106,6 +111,16 @@ python main.py resume <job_id> --max-reviews=300
 ```bash
 python main.py search "hotels in London" --max-places=100 --max-reviews=50 --workers=8
 ```
+
+### Extract contact emails from websites
+
+When Google Maps doesn't list an email, the scraper can visit the business website and extract it:
+
+```bash
+python main.py search "restaurants in Nairobi" --max-places=30 --extract-emails
+```
+
+Works with `search`, `place`, and `resume`.
 
 ## How Resume Works
 
