@@ -109,6 +109,7 @@ def cmd_search(args):
         proxy=args.proxy, lang=args.lang, gl=args.gl,
         min_delay=args.delay, max_delay=args.delay * 2,
         workers=args.workers, session_file=args.session_file,
+        extract_emails=args.extract_emails,
     ) as scraper:
 
         def _overall_cb(done, total):
@@ -152,6 +153,7 @@ def cmd_place(args):
         proxy=args.proxy, lang=args.lang, gl=args.gl,
         min_delay=args.delay, max_delay=args.delay * 2,
         workers=args.workers, session_file=args.session_file,
+        extract_emails=args.extract_emails,
     ) as scraper:
         place, reviews_saved = scraper.scrape_single_place(
             db, args.place_id, 
@@ -218,6 +220,7 @@ def cmd_resume(args):
         proxy=args.proxy, lang=args.lang, gl=args.gl,
         min_delay=args.delay, max_delay=args.delay * 2,
         workers=args.workers, session_file=args.session_file,
+        extract_emails=args.extract_emails,
     ) as scraper:
         def _place_cb(done, total):
             if not args.quiet:
@@ -292,6 +295,7 @@ def main():
     sp.add_argument("--max-reviews", type=int, default=None, help="Max reviews per place (default: unlimited = ALL reviews, 0=skip reviews)")
     sp.add_argument("--db", default="output/gmaps.db")
     sp.add_argument("--job-id", help="Custom job ID for resume tracking")
+    sp.add_argument("--extract-emails", action="store_true", help="Fetch website and extract email if not present in Maps data")
     _add_common_args(sp)
 
     pp = subs.add_parser("place", help="Scrape a single place by ID")
@@ -300,6 +304,7 @@ def main():
     pp.add_argument("--lng", type=float, default=0.0)
     pp.add_argument("--max-reviews", type=int, default=None, help="Max reviews (default: unlimited = ALL, 0=skip)")
     pp.add_argument("--db", default="output/gmaps.db")
+    pp.add_argument("--extract-emails", action="store_true", help="Fetch website and extract email if not present in Maps data")
     _add_common_args(pp)
 
     lp = subs.add_parser("list", help="List places from search (no scrape)")
@@ -319,6 +324,7 @@ def main():
     rp.add_argument("job_id")
     rp.add_argument("--max-reviews", type=int, default=None, help="Max reviews per place (default: unlimited = ALL, 0=skip)")
     rp.add_argument("--db", default="output/gmaps.db")
+    rp.add_argument("--extract-emails", action="store_true", help="Fetch website and extract email if not present in Maps data")
     _add_common_args(rp)
 
     st = subs.add_parser("stats", help="Show database statistics")
