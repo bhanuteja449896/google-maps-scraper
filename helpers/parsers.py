@@ -514,12 +514,8 @@ def parse_place_response(text):
     return place
 
 
-def parse_reviews_response(text):
-    """Parse reviews response. Returns (reviews, next_cursor)."""
-    text = _strip_xssi(text)
-    try:
-        data = json.loads(text)
-    except json.JSONDecodeError:
+def _reviews_from_data(data):
+    if not isinstance(data, list):
         return [], None
 
     next_cursor = _get(data, 1)
@@ -535,6 +531,48 @@ def parse_reviews_response(text):
         if review:
             reviews.append(review)
     return reviews, next_cursor if next_cursor else None
+
+
+def _iter_batchexecute_chunks(text):
+    text = _strip_xssi(text)
+    lines = text.split("\n")
+    i = 0
+    while i < len(lines):
+        line = lines[i].strip()
+        i += 1
+        if not line.isdigit():
+            continue
+        if i < len(lines):
+            yield lines[i]
+            i += 1
+
+
+def parse_batchexecute_reviews_response(text):
+    """
+    Returns (reviews, next_cursor).
+    """
+    for chunk in _iter_batchexecute_chunks(text):
+        try:
+            frames = json.loads(chunk)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(frames, list):
+            continue
+        for frame in frames:
+            if (
+                isinstance(frame, list) and len(frame) > 2
+                and frame[0] == "wrb.fr"
+                and frame[1] == "/MapsUgcPostService.ListUgcPosts"
+            ):
+                payload = frame[2]
+                if not payload:
+                    return [], None
+                try:
+                    data = json.loads(payload)
+                except json.JSONDecodeError:
+                    return [], None
+                return _reviews_from_data(data)
+    return [], None
 
 
 def _parse_single_review(entry):

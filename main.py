@@ -46,8 +46,6 @@ def _print_place(place, index=None, reviews_saved=None):
         print(f"  About:    {len(place.about)} attribute group(s)")
     if place.hotel_class:
         print(f"  Hotel:    {place.hotel_class}")
-    if place.hotel_amenities:
-        print(f"  Amenities: {', '.join(place.hotel_amenities[:5])}")
     if reviews_saved is not None:
         print(f"  Reviews:  {reviews_saved:,} saved")
 

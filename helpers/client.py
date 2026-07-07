@@ -1,13 +1,25 @@
 import logging
 import os
 import random
+import re
 import sys
 import time
 from pathlib import Path
 
 import httpcloak
 
+from helpers.endpoints import BASE, BGKEY_FALLBACK, place_page_url
+
 logger = logging.getLogger(__name__)
+
+_KEI_RE = re.compile(r"kEI=.([A-Za-z0-9_\-]+).")
+
+_BATCHEXECUTE_HEADERS = {
+    "content-type": "application/x-www-form-urlencoded;charset=UTF-8",
+    "x-same-domain": "1",
+    "origin": "https://www.google.com",
+    "x-maps-bgkey": BGKEY_FALLBACK,
+}
 
 _MAPS_HEADERS = {
     "accept": "*/*",
@@ -46,6 +58,7 @@ class Client:
         self._req_count = 0
         self._warmup_done = False
         self._session = None
+        self._review_sessions = {}
         self._build_session()
 
     def _build_session(self):
@@ -115,6 +128,59 @@ class Client:
                 time.sleep(wait)
 
         raise last_err or RuntimeError("Request failed after 3 attempts")
+
+    def post(self, url, data, extra_headers=None):
+        """POST with Maps + batchexecute headers, throttling, and retry logic."""
+        if not self._warmup_done:
+            self.warmup()
+
+        headers = dict(_MAPS_HEADERS)
+        headers.update(_BATCHEXECUTE_HEADERS)
+        if extra_headers:
+            headers.update(extra_headers)
+
+        self._throttle()
+
+        last_err = None
+        for attempt in range(1, 4):
+            try:
+                resp = self._session.post(url, data=data, headers=headers)
+                self._req_count += 1
+
+                if resp.status_code == 429:
+                    backoff = min(2 ** attempt + random.random(), 30)
+                    logger.warning("Rate limited (429). Backoff %.1fs (attempt %d/3)", backoff, attempt)
+                    time.sleep(backoff)
+                    self._session.refresh()
+                    continue
+
+                return resp
+
+            except Exception as exc:
+                last_err = exc
+                wait = min(2 ** attempt, 10)
+                logger.debug("Attempt %d/3 failed: %s. Retrying in %.1fs", attempt, exc, wait)
+                time.sleep(wait)
+
+        raise last_err or RuntimeError("Request failed after 3 attempts")
+
+    def get_review_session(self, place_id, lat=0.0, lng=0.0, query="", force=False):
+        """Visit the place's /maps/place page to harvest a fresh kEI token.
+
+        Reviews (MapsUgcPostService.ListUgcPosts) require an ei token pulled
+        from a real page load; returns (ei, source_path) for use in
+        reviews_batchexecute_request(), or (None, source_path) on failure.
+        Cached per place_id so pagination doesn't re-fetch the page each time.
+        """
+        if not force and place_id in self._review_sessions:
+            return self._review_sessions[place_id]
+
+        source_path = place_page_url(place_id, lat, lng, query=query).replace(BASE, "", 1)
+        resp = self.get(BASE + source_path)
+        m = _KEI_RE.search(resp.text) if resp.status_code == 200 else None
+        result = (m.group(1) if m else None), source_path
+        self._review_sessions[place_id] = result
+        return result
 
     def refresh(self):
         """Reset connections, keep TLS cache"""
