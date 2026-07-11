@@ -6,8 +6,6 @@ import time
 
 BASE = "https://www.google.com"
 
-BGKEY_FALLBACK = "bgssf"
-
 
 def search_url(query, lat, lng, zoom=13, lang="en", gl="us", page_size=20, start=0):
     span = 360 / (2 ** zoom)

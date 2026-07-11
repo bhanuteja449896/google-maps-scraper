@@ -8,17 +8,19 @@ from pathlib import Path
 
 import httpcloak
 
-from helpers.endpoints import BASE, BGKEY_FALLBACK, place_page_url
+from helpers.endpoints import BASE, place_page_url
+from helpers.utils import _decode_key
 
 logger = logging.getLogger(__name__)
 
 _KEI_RE = re.compile(r"kEI=.([A-Za-z0-9_\-]+).")
 
+
 _BATCHEXECUTE_HEADERS = {
     "content-type": "application/x-www-form-urlencoded;charset=UTF-8",
     "x-same-domain": "1",
     "origin": "https://www.google.com",
-    "x-maps-bgkey": BGKEY_FALLBACK,
+    "x-maps-bgkey": _decode_key("HMYYL"),
 }
 
 _MAPS_HEADERS = {
