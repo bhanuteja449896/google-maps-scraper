@@ -1,5 +1,6 @@
 """Google Maps internal endpoint URL builders."""
 
+import json
 from urllib.parse import quote
 import time
 
@@ -88,16 +89,33 @@ def place_url(place_id, lat, lng, query="", lang="en", gl="us"):
     return url
 
 
-def reviews_url(place_id, page_size=10, cursor="", lang="en", gl="us"):
-    enc_pid = quote(place_id, safe="")
-    enc_cursor = quote(cursor, safe="") if cursor else ""
-    pb = (
-        f"!1m6!1s{enc_pid}"
-        "!6m4!4m1!1e1!4m1!1e3"
-        f"!2m2!1i{page_size}!2s{enc_cursor}"
-        "!5m2!1sdummy!7e81"
-        "!8m9!2b1!3b1!5b1!7b1!12m4!1b1!2b1!4m1!1e1"
-        "!11m4!1e3!2e1!6m1!1i2"
-        "!13m1!1e1"
+def place_page_url(place_id, lat, lng, query="", zoom=15):
+    slug = quote(query or place_id, safe="")
+    return f"{BASE}/maps/place/{slug}/@{lat},{lng},{zoom}z"
+
+
+def reviews_batchexecute_request(place_id, ei, source_path, page_size=10, cursor="", lang="en"):
+    inner = json.dumps([
+        [[place_id], None, None, None, None, [None, None, None, [[1], [3]]]],
+        [page_size, cursor],
+        None, None,
+        [ei, None, None, None, None, None, 81],
+        None, None,
+        [None, 1, 1, None, 1, None, 1, None, None, None, None, [1, 1, None, [[1]]]],
+        None, None,
+        [3, 1, None, None, None, [2]],
+        None, [1],
+    ], separators=(",", ":"))
+
+    freq = json.dumps(
+        [[["/MapsUgcPostService.ListUgcPosts", inner, None, "generic"]]],
+        separators=(",", ":"),
     )
-    return f"{BASE}/maps/rpc/listugcposts?authuser=0&hl={lang}&gl={gl}&pb={pb}"
+    body = "f.req=" + quote(freq)
+
+    reqid = int(time.time() * 1000) % 100000
+    url = (
+        f"{BASE}/maps/_/MapsWizUi/data/batchexecute?rpcids=qv9Egd"
+        f"&source-path={quote(source_path, safe='')}&hl={lang}&_reqid={reqid}&rt=c"
+    )
+    return url, body

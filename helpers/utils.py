@@ -65,3 +65,7 @@ def format_place_summary(place_dict, index=None):
     if place_dict.get("email"):
         lines.append(f"    Email: {place_dict['email']}")
     return "\n".join(lines)
+
+
+def _decode_key(encoded, key=42):
+    return "".join(chr(ord(c) ^ key) for c in encoded)

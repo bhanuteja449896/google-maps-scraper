@@ -8,8 +8,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from helpers.client import Client
 from helpers.email_extractor import extract_emails
-from helpers.endpoints import place_url, reviews_url, search_url
-from helpers.parsers import parse_place_response, parse_reviews_response, parse_search_response
+from helpers.endpoints import place_url, reviews_batchexecute_request, search_url
+from helpers.parsers import parse_batchexecute_reviews_response, parse_place_response, parse_search_response
 
 logger = logging.getLogger(__name__)
 
@@ -116,31 +116,35 @@ class GoogleMapsScraper:
             place.place_id = place_id
         return place
 
-    def get_reviews(self, place_id, cursor="", page_size=10):
+    def get_reviews(self, place_id, cursor="", page_size=10, lat=0.0, lng=0.0, query=""):
         """Fetch one page of reviews. Returns (reviews, next_cursor)."""
         if not self._main_client:
             raise RuntimeError("Scraper not started")
-        url = reviews_url(place_id=place_id, page_size=page_size, cursor=cursor,
-                         lang=self.lang, gl=self.gl)
+        ei, source_path = self._main_client.get_review_session(place_id, lat=lat, lng=lng, query=query)
+        if not ei:
+            logger.warning("Could not harvest review session for %s", place_id)
+            return [], None
+        url, body = reviews_batchexecute_request(place_id, ei, source_path, page_size=page_size,
+                                                  cursor=cursor, lang=self.lang)
         logger.info("Reviews: %s cursor=%s", place_id, cursor[:20] if cursor else "start")
         try:
-            resp = self._main_client.get(url)
+            resp = self._main_client.post(url, body)
         except Exception as exc:
             logger.error("Reviews failed %s: %s", place_id, exc)
             return [], None
         if resp.status_code != 200:
             logger.warning("Reviews HTTP %d", resp.status_code)
             return [], None
-        return parse_reviews_response(resp.text)
+        return parse_batchexecute_reviews_response(resp.text)
 
-    def iter_reviews(self, place_id, max_reviews=None, cursor=""):
+    def iter_reviews(self, place_id, max_reviews=None, cursor="", lat=0.0, lng=0.0, query=""):
         """Yield reviews with resumable cursor support.
-        
+
         If max_reviews is None, yields ALL reviews until exhausted.
         """
         fetched = 0
         while True:
-            reviews, next_cursor = self.get_reviews(place_id, cursor=cursor)
+            reviews, next_cursor = self.get_reviews(place_id, cursor=cursor, lat=lat, lng=lng, query=query)
             for review in reviews:
                 yield review
                 fetched += 1
@@ -438,16 +442,18 @@ class GoogleMapsScraper:
                 target = max_reviews
                 _print_info(f"Scraping reviews for: {place.name}")
 
-            while True:
-                rurl = reviews_url(place_id, page_size=10, cursor=rcursor,
-                                   lang=self.lang, gl=self.gl)
+            ei, source_path = self._main_client.get_review_session(
+                place_id, lat=lat, lng=lng, query=query or place.name)
+            while ei:
+                rurl, rbody = reviews_batchexecute_request(
+                    place_id, ei, source_path, page_size=10, cursor=rcursor, lang=self.lang)
                 try:
-                    rresp = self._main_client.get(rurl)
+                    rresp = self._main_client.post(rurl, rbody)
                 except Exception:
                     break
                 if rresp.status_code != 200:
                     break
-                reviews, next_cursor = parse_reviews_response(rresp.text)
+                reviews, next_cursor = parse_batchexecute_reviews_response(rresp.text)
                 for review in reviews:
                     db.insert_review(place_id, review)
                     reviews_saved += 1
@@ -506,26 +512,30 @@ class GoogleMapsScraper:
         if max_reviews != 0:
             rcursor = cursor
             retries = 0
-            while True:
-                rurl = reviews_url(pid, page_size=10, cursor=rcursor,
-                                   lang=self.lang, gl=self.gl)
+            ei, source_path = client.get_review_session(
+                pid, lat=lat, lng=lng, query=place_name or place.name)
+            while ei:
+                rurl, rbody = reviews_batchexecute_request(
+                    pid, ei, source_path, page_size=10, cursor=rcursor, lang=self.lang)
                 try:
-                    rresp = client.get(rurl)
+                    rresp = client.post(rurl, rbody)
                 except Exception:
                     break
                 if rresp.status_code != 200:
                     break
-                reviews, next_cursor = parse_reviews_response(rresp.text)
+                reviews, next_cursor = parse_batchexecute_reviews_response(rresp.text)
 
                 # If we got 0 reviews but the place is known to have reviews,
-                # the session may have expired. Refresh once and retry.
+                # the review session (ei) may be stale. Re-harvest and retry once.
                 if not reviews and place.review_count > 0 and retries == 0:
-                    logger.warning("Reviews empty for %s (has %d reviews) — refreshing session...", pid, place.review_count)
+                    logger.warning("Reviews empty for %s (has %d reviews) — refreshing review session...", pid, place.review_count)
                     try:
-                        client.save()
-                        client.refresh()
-                        rresp = client.get(rurl)
-                        reviews, next_cursor = parse_reviews_response(rresp.text)
+                        ei, source_path = client.get_review_session(
+                            pid, lat=lat, lng=lng, query=place_name or place.name, force=True)
+                        rurl, rbody = reviews_batchexecute_request(
+                            pid, ei, source_path, page_size=10, cursor=rcursor, lang=self.lang)
+                        rresp = client.post(rurl, rbody)
+                        reviews, next_cursor = parse_batchexecute_reviews_response(rresp.text)
                     except Exception as exc:
                         logger.debug("Session refresh failed: %s", exc)
                     retries += 1
