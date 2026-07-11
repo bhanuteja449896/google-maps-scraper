@@ -43,7 +43,7 @@ _WARMUP_URLS = [
 
 
 class Client:
-    """httpcloak Session wrapper tuned for Google Maps.
+    """Session wrapper
 
     Features:
     - warmup() before first request (simulates real user)
