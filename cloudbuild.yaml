@@ -57,13 +57,15 @@ steps:
       - --region=${_REGION}
       - --platform=managed
       - --allow-unauthenticated
-      - --min-instances=1          # Keep one instance warm (no cold start delays)
+      - --min-instances=0          # Scale to ZERO when idle → $0 cost when not in use
       - --max-instances=1          # Single instance — queue is in-memory
       - --memory=1Gi
       - --cpu=2
       - --timeout=3600             # 1-hour request timeout for long scrapes
       - --concurrency=80           # FastAPI handles concurrent HTTP requests fine
       - --set-env-vars=GOOGLE_CREDENTIALS_FILE=credentials.json
+      # NOTE: Cold start takes 15–30s when container was scaled to zero.
+      # Your frontend calls GET /wakeup on page load and shows "Waking up..." until it responds.
       # ⚠️  Set sensitive env vars via Secret Manager in GCP Console after first deploy
       # --set-secrets=API_KEY=gmaps-api-key:latest
 

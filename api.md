@@ -813,7 +813,7 @@ The `cloudbuild.yaml` deploys with these settings (already configured):
 
 | Setting | Value | Why |
 |---------|-------|-----|
-| `--min-instances=1` | 1 | Keeps one container always warm — no cold start on first request |
+| `--min-instances=0` | 0 | Scales to ZERO when idle — saves money ($0 cost when not in use) |
 | `--max-instances=1` | 1 | Single instance required (job queue is in-memory) |
 | `--memory=1Gi` | 1 GB | Enough for browser sessions + Sheets API |
 | `--cpu=2` | 2 vCPU | Handles 4 concurrent workers smoothly |
@@ -829,22 +829,21 @@ Cloud Run **automatically restarts** the container whenever it:
 - Runs out of memory
 - Becomes unresponsive
 
-Because `min-instances=1`, the restart is seamless and the new container is ready within ~15 seconds.
+Because `min-instances=0`, if it restarts due to a crash, the next request will trigger a cold start (15–30 seconds).
 
 ---
 
 ### Estimated Cloud Run Cost
 
-With `min-instances=1` in `asia-south1` (Mumbai):
+With `min-instances=0` (scale-to-zero):
 
 | Resource | Cost |
 |----------|------|
-| 1 vCPU always-on | ~$17/month |
-| 1 GB RAM always-on | ~$6/month |
-| Requests | Free tier: 2M/month |
-| **Estimated total** | **~$23/month** |
+| Always-on | **$0/month** |
+| Active usage | fractions of a cent per request |
+| **Estimated total** | **$0.00/month** (unless you do millions of scrapes) |
 
-> To reduce cost when not in use: set `--min-instances=0` (but `/wakeup` will then take 15–30 seconds on cold start).
+> Because it scales to zero, the very first request (your frontend's `/wakeup` call) will take 15–30 seconds to wake up the server. After that, it stays warm while in use.
 
 ---
 
