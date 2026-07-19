@@ -88,13 +88,10 @@ app = FastAPI(
     redoc_url="/redoc",
 )
 
-# CORS — allow your frontend origin via ALLOWED_ORIGINS env var
-_raw_origins = os.environ.get("ALLOWED_ORIGINS", "*")
-_origins = [o.strip() for o in _raw_origins.split(",") if o.strip()]
-
+# CORS — allow all origins for easy frontend access
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=_origins,
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

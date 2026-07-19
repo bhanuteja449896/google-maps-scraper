@@ -14,11 +14,9 @@
 #   _SERVICE  — Cloud Run service name
 #
 # Required Cloud Run environment variables (set as secrets or env vars):
-#   API_KEY                  — Your API secret key
 #   GOOGLE_CREDENTIALS_FILE  — Path to credentials JSON in container (credentials.json)
 #   SHARE_WITH_EMAIL         — Gmail to share spreadsheets with
 #   GOOGLE_DRIVE_FOLDER_ID   — Drive folder for spreadsheets (optional)
-#   ALLOWED_ORIGINS          — Comma-separated CORS origins (e.g. https://yourfrontend.com)
 # ─────────────────────────────────────────────────────────────────────────────
 
 substitutions:
@@ -31,8 +29,6 @@ steps:
     id: build
     args:
       - build
-      - -t
-      - gcr.io/$PROJECT_ID/${_SERVICE}:$COMMIT_SHA
       - -t
       - gcr.io/$PROJECT_ID/${_SERVICE}:latest
       - .
@@ -53,24 +49,19 @@ steps:
       - run
       - deploy
       - ${_SERVICE}
-      - --image=gcr.io/$PROJECT_ID/${_SERVICE}:$COMMIT_SHA
+      - --image=gcr.io/$PROJECT_ID/${_SERVICE}:latest
       - --region=${_REGION}
       - --platform=managed
       - --allow-unauthenticated
+      - --no-cpu-throttling        # REQUIRED for background tasks to run outside of HTTP requests
       - --min-instances=0          # Scale to ZERO when idle → $0 cost when not in use
       - --max-instances=1          # Single instance — queue is in-memory
       - --memory=1Gi
       - --cpu=2
       - --timeout=3600             # 1-hour request timeout for long scrapes
-      - --concurrency=80           # FastAPI handles concurrent HTTP requests fine
       - --set-env-vars=GOOGLE_CREDENTIALS_FILE=credentials.json
-      # NOTE: Cold start takes 15–30s when container was scaled to zero.
-      # Your frontend calls GET /wakeup on page load and shows "Waking up..." until it responds.
-      # ⚠️  Set sensitive env vars via Secret Manager in GCP Console after first deploy
-      # --set-secrets=API_KEY=gmaps-api-key:latest
 
 images:
-  - gcr.io/$PROJECT_ID/${_SERVICE}:$COMMIT_SHA
   - gcr.io/$PROJECT_ID/${_SERVICE}:latest
 
 options:
