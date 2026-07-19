@@ -1,0 +1,76 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# GCP Cloud Build — Build + Push + Deploy to Cloud Run
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# Usage (manual trigger):
+#   gcloud builds submit --config cloudbuild.yaml \
+#     --substitutions _REGION=asia-south1,_SERVICE=gmaps-scraper-api \
+#     .
+#
+# Or connect your repo to Cloud Build triggers for auto-deploy on push.
+#
+# Required Cloud Build substitutions:
+#   _REGION   — Cloud Run region  (default: asia-south1 for India)
+#   _SERVICE  — Cloud Run service name
+#
+# Required Cloud Run environment variables (set as secrets or env vars):
+#   API_KEY                  — Your API secret key
+#   GOOGLE_CREDENTIALS_FILE  — Path to credentials JSON in container (credentials.json)
+#   SHARE_WITH_EMAIL         — Gmail to share spreadsheets with
+#   GOOGLE_DRIVE_FOLDER_ID   — Drive folder for spreadsheets (optional)
+#   ALLOWED_ORIGINS          — Comma-separated CORS origins (e.g. https://yourfrontend.com)
+# ─────────────────────────────────────────────────────────────────────────────
+
+substitutions:
+  _REGION: asia-south1
+  _SERVICE: gmaps-scraper-api
+
+steps:
+  # Step 1: Build the Docker image
+  - name: gcr.io/cloud-builders/docker
+    id: build
+    args:
+      - build
+      - -t
+      - gcr.io/$PROJECT_ID/${_SERVICE}:$COMMIT_SHA
+      - -t
+      - gcr.io/$PROJECT_ID/${_SERVICE}:latest
+      - .
+
+  # Step 2: Push the image to Container Registry
+  - name: gcr.io/cloud-builders/docker
+    id: push
+    args:
+      - push
+      - --all-tags
+      - gcr.io/$PROJECT_ID/${_SERVICE}
+
+  # Step 3: Deploy to Cloud Run
+  - name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    id: deploy
+    entrypoint: gcloud
+    args:
+      - run
+      - deploy
+      - ${_SERVICE}
+      - --image=gcr.io/$PROJECT_ID/${_SERVICE}:$COMMIT_SHA
+      - --region=${_REGION}
+      - --platform=managed
+      - --allow-unauthenticated
+      - --min-instances=1          # Keep one instance warm (no cold start delays)
+      - --max-instances=1          # Single instance — queue is in-memory
+      - --memory=1Gi
+      - --cpu=2
+      - --timeout=3600             # 1-hour request timeout for long scrapes
+      - --concurrency=80           # FastAPI handles concurrent HTTP requests fine
+      - --set-env-vars=GOOGLE_CREDENTIALS_FILE=credentials.json
+      # ⚠️  Set sensitive env vars via Secret Manager in GCP Console after first deploy
+      # --set-secrets=API_KEY=gmaps-api-key:latest
+
+images:
+  - gcr.io/$PROJECT_ID/${_SERVICE}:$COMMIT_SHA
+  - gcr.io/$PROJECT_ID/${_SERVICE}:latest
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+  machineType: E2_HIGHCPU_8

@@ -408,7 +408,7 @@ class GoogleMapsScraper:
             place.email = emails[0]
             logger.info("Extracted email %s from %s", place.email, place.website)
 
-    def scrape_single_place(self, db, place_id, max_reviews=None, lat=0.0, lng=0.0, query=""):
+    def scrape_single_place(self, db, place_id, max_reviews=None, lat=0.0, lng=0.0, query="", job_id=None):
         """Scrape a single place with full details and reviews."""
         if not self._main_client:
             raise RuntimeError("Scraper not started")
@@ -427,7 +427,7 @@ class GoogleMapsScraper:
         cursor = ""
         if max_reviews != 0:
             # Resume from DB cursor if we already have reviews
-            existing = db.get_place_cursor(place_id)
+            existing = db.get_place_cursor(place_id, job_id=job_id)
             rcursor = existing.get("cursor", "")
             already_saved = existing.get("total_saved", 0)
 

@@ -1,0 +1,29 @@
+version: "3.9"
+
+services:
+  api:
+    build: .
+    image: gmaps-scraper-api:local
+    container_name: gmaps-scraper-api
+    restart: unless-stopped        # Auto-restart on crash (mirrors Cloud Run behaviour)
+    ports:
+      - "8000:8080"                # Local port 8000 → container port 8080
+    environment:
+      - PORT=8080
+      - API_KEY=${API_KEY:-}
+      - GOOGLE_CREDENTIALS_FILE=${GOOGLE_CREDENTIALS_FILE:-credentials.json}
+      - SHARE_WITH_EMAIL=${SHARE_WITH_EMAIL:-}
+      - GOOGLE_DRIVE_FOLDER_ID=${GOOGLE_DRIVE_FOLDER_ID:-}
+      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-*}
+    env_file:
+      - .env
+    volumes:
+      # Mount credentials so you don't bake secrets into the image locally
+      - ./credentials.json:/app/credentials.json:ro
+      - ./token.json:/app/token.json:rw
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s

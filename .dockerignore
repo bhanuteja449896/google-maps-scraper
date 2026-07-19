@@ -1,0 +1,55 @@
+# Docker build context ignore file
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Python artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Test & dev files
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+*.test.py
+
+# Git
+.git/
+.gitignore
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Output / session files (ephemeral, not needed in image)
+output/
+session.json
+
+# Local env (secrets must be injected via Cloud Run env vars, not baked in)
+.env
+
+# ⚠️  credentials.json and token.json ARE copied into the image.
+#    In production, use Cloud Run Secret Manager secrets instead.
+# token.json
+# credentials.json
+
+# Docker compose (not needed in image)
+docker-compose.yml
