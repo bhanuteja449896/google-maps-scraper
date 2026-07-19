@@ -1,0 +1,22 @@
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.env
+.venv
+venv/
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+*.log
+*.db*
+output/
+
+# Google API credentials — never commit these
+credentials.json
+token.json
+
+*/node_modules/*
+deobfuscator/
+gmaps-request
