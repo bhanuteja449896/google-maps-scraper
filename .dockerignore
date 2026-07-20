@@ -44,7 +44,7 @@ output/
 session.json
 
 # Local env (secrets must be injected via Cloud Run env vars, not baked in)
-.env
+# .env
 
 # ⚠️  credentials.json and token.json ARE copied into the image.
 #    In production, use Cloud Run Secret Manager secrets instead.

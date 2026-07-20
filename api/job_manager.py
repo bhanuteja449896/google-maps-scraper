@@ -197,6 +197,102 @@ def get_queue_length() -> int:
     return _job_queue.qsize()
 
 
+def remove_queued_job(job_id: str) -> bool:
+    """
+    Remove a queued (not yet processing) job from the in-memory state.
+    The job_queue is a Queue — we can't directly remove items, so we mark
+    the job cancelled and the worker will skip it when it dequeues.
+    Returns True if found and successfully removed; False otherwise.
+    """
+    with _jobs_lock:
+        job = _jobs.get(job_id)
+        if not job:
+            return False
+        if job["status"] != "queued":
+            return False  # already running or terminal — use cancel_job instead
+        event = _cancel_events.get(job_id)
+        if event:
+            event.set()
+        job["status"] = "cancelled"
+        job["updated_at"] = _now_iso()
+    logger.info("Removed queued job %s from queue", job_id)
+    return True
+
+def get_live_state() -> dict:
+    """
+    Return a full live-state snapshot suitable for broadcasting over WebSocket.
+    Includes system metrics + currently active and queued jobs with rich progress data.
+    """
+    metrics = get_metrics()
+
+    with _jobs_lock:
+        all_jobs = [{k: v for k, v in j.items()} for j in _jobs.values()]
+
+    active_tasks = []
+    queued_tasks = []
+    completed_tasks = []
+
+    for job in all_jobs:
+        status = job.get("status", "")
+        if status == "processing":
+            places_found = job.get("places_found", 0)
+            places_done = job.get("places_done", 0)
+            pct = job.get("progress_pct", 0)
+            if places_found > 0 and pct == 0:
+                pct = int(100 * places_done / places_found)
+            active_tasks.append({
+                "job_id": job["job_id"],
+                "query": job.get("query", ""),
+                "status": "processing",
+                "progress_pct": min(pct, 100),
+                "places_done": places_done,
+                "places_found": places_found,
+                "reviews_done": job.get("reviews_done", 0),
+                "started_at": job.get("started_at"),
+                "updated_at": job.get("updated_at"),
+            })
+        elif status == "queued":
+            enqueued_at = job.get("enqueued_at", "")
+            # compute 1-based position
+            pos = 1
+            for j2 in all_jobs:
+                if j2["job_id"] != job["job_id"] and j2["status"] == "queued":
+                    if j2.get("enqueued_at", "") < enqueued_at:
+                        pos += 1
+            queued_tasks.append({
+                "job_id": job["job_id"],
+                "query": job.get("query", ""),
+                "status": "queued",
+                "queue_position": pos,
+                "enqueued_at": enqueued_at,
+            })
+        elif status in ("available", "completed", "done"):
+            completed_tasks.append({
+                "job_id": job["job_id"],
+                "query": job.get("query", ""),
+                "status": "available",
+                "places_done": job.get("places_done", 0),
+                "spreadsheet_url": job.get("spreadsheet_url", ""),
+                "updated_at": job.get("updated_at", ""),
+            })
+
+    # Sort by position / started_at
+    active_tasks.sort(key=lambda x: x.get("started_at") or "")
+    queued_tasks.sort(key=lambda x: x.get("queue_position", 99))
+    
+    # Sort completed tasks by updated_at descending and take top 5
+    completed_tasks.sort(key=lambda x: x.get("updated_at") or "", reverse=True)
+    completed_tasks = completed_tasks[:5]
+
+    return {
+        "type": "state",
+        "metrics": metrics,
+        "active_tasks": active_tasks,
+        "queued_tasks": queued_tasks,
+        "completed_tasks": completed_tasks,
+    }
+
+
 def get_metrics() -> Dict[str, Any]:
     """Return monitoring metrics including memory, CPU and job counts."""
     try:

@@ -144,38 +144,78 @@ class SheetsDatabase:
     # ──────────────────────────────────────────────────────────────────────
 
     def _create_spreadsheet(self, title: str) -> tuple[str, str]:
-        """Create a new spreadsheet. Returns (sheet_id, url)."""
-        body = {
-            "properties": {"title": title},
-            "sheets": [
-                {"properties": {"title": "Places",  "index": 0, "sheetId": 0}},
-                {"properties": {"title": "Reviews", "index": 1, "sheetId": 1}},
-                {"properties": {"title": "Jobs",    "index": 2, "sheetId": 2}},
-            ],
-        }
-        resp = _retry(lambda: self._sheets.spreadsheets().create(body=body).execute())
-        sid = resp["spreadsheetId"]
-        url = f"https://docs.google.com/spreadsheets/d/{sid}"
+        """Create a new spreadsheet. Returns (sheet_id, url).
 
-        # Optionally move to the configured Drive folder
+        When GOOGLE_DRIVE_FOLDER_ID is set, creates the file directly inside
+        that folder using the Drive API (avoids the buggy 2-step move that
+        fails with restricted Drive scopes).
+        """
         if self.folder_id:
+            # ── Create via Drive API so we can specify parents at creation ──
+            # This is the only reliable way to place files in a specific folder
+            # without needing the 'removeParents' permission.
+            file_meta = {
+                "name": title,
+                "mimeType": "application/vnd.google-apps.spreadsheet",
+                "parents": [self.folder_id],
+            }
             try:
-                file_meta = _retry(lambda: self._drive.files().get(
-                    fileId=sid, fields="parents"
+                drive_resp = _retry(lambda: self._drive.files().create(
+                    body=file_meta,
+                    fields="id",
                 ).execute())
-                prev_parents = ",".join(file_meta.get("parents", []))
-                _retry(lambda: self._drive.files().update(
-                    fileId=sid,
-                    addParents=self.folder_id,
-                    removeParents=prev_parents,
-                    fields="id, parents",
-                ).execute())
-                logger.info("Moved spreadsheet to Drive folder %s", self.folder_id)
+                sid = drive_resp["id"]
+                logger.info("Created spreadsheet in Drive folder %s: %s", self.folder_id, sid)
             except Exception as exc:
                 logger.warning(
-                    "Could not move spreadsheet to Drive folder (folder may not be "
-                    "accessible to the service account): %s", exc
+                    "Could not create spreadsheet in Drive folder %s (%s). "
+                    "Falling back to default location.", self.folder_id, exc
                 )
+                # Fallback: create via Sheets API (root of Drive)
+                body = {
+                    "properties": {"title": title},
+                    "sheets": [
+                        {"properties": {"title": "Places",  "index": 0, "sheetId": 0}},
+                        {"properties": {"title": "Reviews", "index": 1, "sheetId": 1}},
+                        {"properties": {"title": "Jobs",    "index": 2, "sheetId": 2}},
+                    ],
+                }
+                resp = _retry(lambda: self._sheets.spreadsheets().create(body=body).execute())
+                sid = resp["spreadsheetId"]
+        else:
+            # No folder specified — create via Sheets API (creates in root)
+            body = {
+                "properties": {"title": title},
+                "sheets": [
+                    {"properties": {"title": "Places",  "index": 0, "sheetId": 0}},
+                    {"properties": {"title": "Reviews", "index": 1, "sheetId": 1}},
+                    {"properties": {"title": "Jobs",    "index": 2, "sheetId": 2}},
+                ],
+            }
+            resp = _retry(lambda: self._sheets.spreadsheets().create(body=body).execute())
+            sid = resp["spreadsheetId"]
+
+        url = f"https://docs.google.com/spreadsheets/d/{sid}"
+
+        # When created via Drive API we need to add the sheet tabs via batchUpdate
+        # because Drive API doesn't support specifying sheet structure at creation.
+        if self.folder_id:
+            try:
+                # Add the three sheets (a new Google Sheet has one default sheet "Sheet1")
+                requests = [
+                    {"updateSheetProperties": {
+                        "properties": {"sheetId": 0, "title": "Places", "index": 0},
+                        "fields": "title,index",
+                    }},
+                    {"addSheet": {"properties": {"title": "Reviews", "index": 1, "sheetId": 1}}},
+                    {"addSheet": {"properties": {"title": "Jobs",    "index": 2, "sheetId": 2}}},
+                ]
+                _retry(lambda: self._sheets.spreadsheets().batchUpdate(
+                    spreadsheetId=sid,
+                    body={"requests": requests},
+                ).execute())
+            except Exception as exc:
+                logger.warning("Could not rename/add sheets, will use default layout: %s", exc)
 
         # Auto-share with the user's personal email so it appears in "Shared with me"
         if self.share_email:
@@ -191,8 +231,9 @@ class SheetsDatabase:
 
         # Write header rows
         self._write_headers(sid)
-        logger.info("Created spreadsheet: %s  %s", title, url)
+        logger.info("Created spreadsheet '%s': %s", title, url)
         return sid, url
+
 
     def _write_headers(self, sid: str):
         data = [

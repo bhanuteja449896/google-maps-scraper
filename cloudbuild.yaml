@@ -56,10 +56,10 @@ steps:
       - --no-cpu-throttling        # REQUIRED for background tasks to run outside of HTTP requests
       - --min-instances=0          # Scale to ZERO when idle → $0 cost when not in use
       - --max-instances=1          # Single instance — queue is in-memory
-      - --memory=1Gi
+      - --memory=4Gi
       - --cpu=2
       - --timeout=3600             # 1-hour request timeout for long scrapes
-      - --set-env-vars=GOOGLE_CREDENTIALS_FILE=credentials.json
+      - --set-env-vars=GOOGLE_CREDENTIALS_FILE=credentials.json,GOOGLE_DRIVE_FOLDER_ID=1pBp2CphmuqhBmiGGuLmeAi4Diy7b1MQq,SHARE_WITH_EMAIL=bhanutejamakkineni@gmail.com
 
 images:
   - gcr.io/$PROJECT_ID/${_SERVICE}:latest

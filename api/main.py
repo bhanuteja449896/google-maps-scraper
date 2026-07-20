@@ -1,6 +1,6 @@
 """
-Google Maps Scraper — Production REST API
-==========================================
+Google Maps Scraper — Production REST + WebSocket API
+=====================================================
 FastAPI backend designed for GCP Cloud Run deployment.
 
 Status lifecycle
@@ -10,6 +10,11 @@ Status lifecycle
   GET  /jobs/{id}  →  status="available"   (on success)
   GET  /jobs/{id}  →  status="failed"      (on error)
   GET  /jobs/{id}  →  status="cancelled"   (after DELETE)
+
+WebSocket live feed
+-------------------
+  Connect to WS /ws/live for real-time metrics + active/queued job state.
+  Server pushes a snapshot every 1.5 seconds (no auth required — read-only).
 
 Cloud Run wakeup
 ----------------
@@ -23,11 +28,13 @@ Auth
   If API_KEY env var is not set, auth is disabled (dev mode).
 """
 
+import asyncio
+import json
 import logging
 import os
 from contextlib import asynccontextmanager
 
-from fastapi import Depends, FastAPI, HTTPException, status
+from fastapi import Depends, FastAPI, HTTPException, WebSocket, WebSocketDisconnect, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import PlainTextResponse
 
@@ -37,9 +44,11 @@ from api.job_manager import (
     enqueue_job,
     get_all_jobs,
     get_job_status,
+    get_live_state,
     get_metrics,
     get_queue_length,
     get_queue_position,
+    remove_queued_job,
     start_worker,
     _get_db,
 )
@@ -78,11 +87,12 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Google Maps Scraper API",
     description=(
-        "Production REST API for Google Maps data extraction. "
+        "Production REST + WebSocket API for Google Maps data extraction. "
         "Jobs are queued and processed one at a time. "
-        "Results are stored in Google Sheets via the Sheets API."
+        "Results are stored in Google Sheets via the Sheets API. "
+        "Connect to /ws/live for real-time metrics and job progress."
     ),
-    version="1.0.0",
+    version="2.0.0",
     lifespan=lifespan,
     docs_url="/docs",
     redoc_url="/redoc",
@@ -145,13 +155,16 @@ def _enrich_job(job: dict) -> dict:
 def root():
     return {
         "name": "Google Maps Scraper API",
-        "version": "1.0.0",
+        "version": "2.0.0",
         "docs": "/docs",
         "health": "/health",
         "endpoints": {
             "status": [
-                "GET /wakeup  — wake up the server & check if active (no auth)",
-                "GET /health  — server health + worker status",
+                "GET  /wakeup  — wake up the server & check if active (no auth)",
+                "GET  /health  — server health + worker status",
+            ],
+            "realtime": [
+                "WS   /ws/live — WebSocket live metrics + active/queued job state (no auth)",
             ],
             "scrape": [
                 "POST /scrape/search  — search query → scrape all results",
@@ -161,16 +174,20 @@ def root():
             "jobs": [
                 "GET    /jobs               — list all jobs",
                 "GET    /jobs/{job_id}      — get job status",
-                "DELETE /jobs/{job_id}      — cancel a job",
+                "DELETE /jobs/{job_id}      — cancel a running job",
                 "GET    /jobs/{job_id}/places — places scraped for a job",
                 "GET    /jobs/{job_id}/stats  — place & review counts",
+            ],
+            "queue": [
+                "GET    /queue              — list queued jobs",
+                "DELETE /queue/{job_id}    — remove a job from the queue (before processing)",
             ],
             "monitor": [
                 "GET /monitor         — system metrics (memory, CPU, uptime)",
                 "GET /monitor/metrics — Prometheus-style text metrics",
             ],
         },
-        "auth": "Pass your secret in the X-API-Key header (no auth needed for /wakeup and /health)",
+        "auth": "Pass your secret in the X-API-Key header (no auth needed for /wakeup, /health, /ws/live)",
     }
 
 
@@ -226,6 +243,46 @@ def health():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# WebSocket live feed  (no auth — read-only metrics)
+# ─────────────────────────────────────────────────────────────────────────────
+
+@app.websocket("/ws/live")
+async def ws_live(websocket: WebSocket):
+    """
+    **WebSocket endpoint — no authentication required.**
+
+    Connects clients to a real-time stream of:
+    - System metrics (CPU, memory, uptime, worker status)
+    - Active tasks (currently processing jobs with live progress %)
+    - Queued tasks (jobs waiting to be processed)
+
+    The server pushes a full state snapshot every 1.5 seconds.
+    Clients should reconnect automatically on disconnect (Cloud Run restarts).
+
+    Message format:
+    ```json
+    {
+      "type": "state",
+      "metrics": { ... },
+      "active_tasks": [{ "job_id": "...", "query": "...", "progress_pct": 43 }],
+      "queued_tasks": [{ "job_id": "...", "query": "...", "queue_position": 1 }]
+    }
+    ```
+    """
+    await websocket.accept()
+    logger.info("WebSocket client connected: %s", websocket.client)
+    try:
+        while True:
+            state = get_live_state()
+            await websocket.send_text(json.dumps(state))
+            await asyncio.sleep(1.5)
+    except WebSocketDisconnect:
+        logger.info("WebSocket client disconnected: %s", websocket.client)
+    except Exception as exc:
+        logger.warning("WebSocket error for %s: %s", websocket.client, exc)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Scrape endpoints  (all require API key)
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -239,7 +296,7 @@ def scrape_search(req: SearchRequest, _=Depends(verify_api_key)):
     """
     Submit a Google Maps search query.
     The job is added to the queue and processed as soon as the current job
-    (if any) completes.  Poll **GET /jobs/{job_id}** to track progress.
+    (if any) completes.  Connect to **WS /ws/live** or poll **GET /jobs/{job_id}** to track progress.
 
     - **status="queued"** → waiting in queue
     - **status="processing"** → currently running
@@ -253,7 +310,7 @@ def scrape_search(req: SearchRequest, _=Depends(verify_api_key)):
         "status": _map_status(jstatus["status"]),
         "queue_position": get_queue_position(job_id),
         "queue_length": get_queue_length(),
-        "message": "Job queued successfully. Poll /jobs/{job_id} for live status.",
+        "message": "Job queued successfully. Connect to /ws/live or poll /jobs/{job_id} for live status.",
         "poll_url": f"/jobs/{job_id}",
     }
 
@@ -267,7 +324,7 @@ def scrape_search(req: SearchRequest, _=Depends(verify_api_key)):
 def scrape_place(req: PlaceRequest, _=Depends(verify_api_key)):
     """
     Scrape full details + all reviews for a specific Google Maps **place_id**.
-    Queued like any other job — poll **GET /jobs/{job_id}** for progress.
+    Queued like any other job — connect to **WS /ws/live** or poll **GET /jobs/{job_id}** for progress.
     """
     params = req.model_dump()
     job_id = enqueue_job("place", params)
@@ -277,7 +334,7 @@ def scrape_place(req: PlaceRequest, _=Depends(verify_api_key)):
         "status": _map_status(jstatus["status"]),
         "queue_position": get_queue_position(job_id),
         "queue_length": get_queue_length(),
-        "message": "Place scrape queued. Poll /jobs/{job_id} for status.",
+        "message": "Place scrape queued. Connect to /ws/live or poll /jobs/{job_id} for status.",
         "poll_url": f"/jobs/{job_id}",
     }
 
@@ -300,7 +357,7 @@ def scrape_resume(req: ResumeRequest, _=Depends(verify_api_key)):
         "job_id": job_id,
         "status": _map_status(jstatus["status"] if jstatus else "queued"),
         "queue_position": get_queue_position(job_id),
-        "message": "Resume job queued. Poll /jobs/{job_id} for status.",
+        "message": "Resume job queued. Connect to /ws/live or poll /jobs/{job_id} for status.",
         "poll_url": f"/jobs/{job_id}",
     }
 
@@ -488,6 +545,56 @@ def get_job_stats(job_id: str, _=Depends(verify_api_key)):
         raise
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Sheets API error: {exc}")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Queue management endpoints
+# ─────────────────────────────────────────────────────────────────────────────
+
+@app.get(
+    "/queue",
+    tags=["Queue"],
+    summary="List jobs currently waiting in the queue",
+)
+def get_queue(_=Depends(verify_api_key)):
+    """
+    Returns all jobs in **queued** status (not yet processing).
+    Jobs are sorted by queue position (1 = next to run).
+    """
+    all_jobs = get_all_jobs()
+    queued = [
+        {**_enrich_job(j), "status": "queued"}
+        for j in all_jobs
+        if j.get("status") == "queued"
+    ]
+    queued.sort(key=lambda x: x.get("queue_position") or 99)
+    return {
+        "queue": queued,
+        "total": len(queued),
+    }
+
+
+@app.delete(
+    "/queue/{job_id}",
+    tags=["Queue"],
+    summary="Remove a queued job before it starts processing",
+)
+def remove_from_queue(job_id: str, _=Depends(verify_api_key)):
+    """
+    Removes a job that is **queued** (not yet started) from the queue.
+    If the job is already **processing**, use `DELETE /jobs/{job_id}` instead.
+    """
+    removed = remove_queued_job(job_id)
+    if not removed:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Job '{job_id}' not found in queue or is already processing/completed.",
+        )
+    return {
+        "job_id": job_id,
+        "status": "removed",
+        "message": "Job removed from queue successfully.",
+    }
 
 
 # ─────────────────────────────────────────────────────────────────────────────
