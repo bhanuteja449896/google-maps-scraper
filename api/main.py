@@ -367,6 +367,27 @@ def scrape_resume(req: ResumeRequest, _=Depends(verify_api_key)):
 # ─────────────────────────────────────────────────────────────────────────────
 
 @app.get(
+    "/tasks/history",
+    tags=["Jobs"],
+    summary="Get history of all past tasks from Master Sheet",
+)
+def get_tasks_history(_=Depends(verify_api_key)):
+    """
+    Returns the list of all historical jobs stored in the master Tasks sheet.
+    """
+    try:
+        db = _get_db()
+        history = db.get_tasks_history()
+        return {
+            "history": history,
+            "total": len(history),
+        }
+    except Exception as exc:
+        logger.error("Failed to get tasks history: %s", exc)
+        raise HTTPException(status_code=500, detail=f"Failed to read tasks history: {exc}")
+
+
+@app.get(
     "/jobs",
     tags=["Jobs"],
     summary="List all tracked jobs",

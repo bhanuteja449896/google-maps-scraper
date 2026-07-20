@@ -330,6 +330,88 @@ class SheetsDatabase:
         return files[0]["id"] if files else None
 
     # ──────────────────────────────────────────────────────────────────────
+    # Internal: Master Tasks Sheet
+    # ──────────────────────────────────────────────────────────────────────
+
+    def _get_or_create_master_tasks(self) -> str:
+        """Finds or creates a master 'Tasks' spreadsheet. Returns its spreadsheetId."""
+        fid = self._find_drive_file("Tasks")
+        if fid:
+            # Check if it's actually a spreadsheet (the name could be anything, but we assume it's a sheet)
+            return fid
+        
+        # Doesn't exist, create it
+        logger.info("Master 'Tasks' sheet not found, creating it...")
+        sid, url = self._create_spreadsheet("Tasks")
+        
+        # Overwrite the headers in this new Tasks sheet (since _create_spreadsheet creates Places/Reviews/Jobs)
+        # We'll just rename "Places" to "Tasks" or use "Sheet1". Let's just create a new sheet with correct headers.
+        try:
+            # If created via Drive API it might just have "Sheet1" or if fallback it has Places, Reviews, Jobs.
+            # Let's just write to the first sheet (which is index 0). We'll assume A1:D1
+            headers = [["Job ID", "Task Name", "Created At", "Spreadsheet Link"]]
+            body = {"values": headers}
+            _retry(lambda: self._sheets.spreadsheets().values().update(
+                spreadsheetId=sid,
+                range="A1:D1",
+                valueInputOption="RAW",
+                body=body,
+            ).execute())
+        except Exception as exc:
+            logger.warning("Could not set headers for master Tasks sheet: %s", exc)
+            
+        return sid
+
+    def _append_to_master_tasks(self, job_id: str, query: str, created_at: str, url: str):
+        try:
+            sid = self._get_or_create_master_tasks()
+            values = [[job_id, query, created_at, url]]
+            body = {"values": values}
+            _retry(lambda: self._sheets.spreadsheets().values().append(
+                spreadsheetId=sid,
+                range="A1",
+                valueInputOption="RAW",
+                insertDataOption="INSERT_ROWS",
+                body=body,
+            ).execute())
+            logger.info("Appended job %s to master Tasks sheet", job_id)
+        except Exception as exc:
+            logger.error("Failed to append to master Tasks sheet: %s", exc)
+
+    def get_tasks_history(self) -> list[dict]:
+        """Returns all past tasks from the master Tasks sheet."""
+        try:
+            fid = self._find_drive_file("Tasks")
+            if not fid:
+                return []
+            
+            resp = _retry(lambda: self._sheets.spreadsheets().values().get(
+                spreadsheetId=fid,
+                range="A:D",
+            ).execute())
+            rows = resp.get("values", [])
+            if len(rows) <= 1:
+                return []
+            
+            # Skip header row
+            result = []
+            for r in rows[1:]:
+                # Pad to 4 cols
+                r = r + [""] * (4 - len(r))
+                result.append({
+                    "job_id": r[0],
+                    "query": r[1],
+                    "created_at": r[2],
+                    "spreadsheet_url": r[3]
+                })
+            # Reverse sort by created_at (assuming newer is at bottom)
+            result.reverse()
+            return result
+        except Exception as exc:
+            logger.error("Failed to fetch tasks history: %s", exc)
+            return []
+
+    # ──────────────────────────────────────────────────────────────────────
     # Internal: Sheets I/O
     # ──────────────────────────────────────────────────────────────────────
 
@@ -568,6 +650,10 @@ class SheetsDatabase:
             ]
             self._append_row(sid, "Jobs", row_values)
             self._save_state(job_id)
+            
+            # Append to master Tasks sheet
+            self._append_to_master_tasks(job_id, query, cache["created_at"], url)
+            
             print(f"  Spreadsheet: {url}")
             if self.share_email:
                 print(f"  Shared with: {self.share_email} (check 'Shared with me' in Drive)")
